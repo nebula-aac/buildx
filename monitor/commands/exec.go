@@ -13,11 +13,11 @@ import (
 type ExecCmd struct {
 	m types.Monitor
 
-	invokeConfig controllerapi.InvokeConfig
+	invokeConfig *controllerapi.InvokeConfig
 	stdout       io.WriteCloser
 }
 
-func NewExecCmd(m types.Monitor, invokeConfig controllerapi.InvokeConfig, stdout io.WriteCloser) types.Command {
+func NewExecCmd(m types.Monitor, invokeConfig *controllerapi.InvokeConfig, stdout io.WriteCloser) types.Command {
 	return &ExecCmd{m, invokeConfig, stdout}
 }
 
@@ -35,12 +35,16 @@ COMMAND and ARG... will be executed in the container.
 }
 
 func (cm *ExecCmd) Exec(ctx context.Context, args []string) error {
+	if ref := cm.m.AttachedSessionID(); ref == "" {
+		return errors.Errorf("no attaching session")
+	}
 	if len(args) < 2 {
 		return errors.Errorf("command must be passed")
 	}
-	cfg := controllerapi.InvokeConfig{
+	cfg := &controllerapi.InvokeConfig{
 		Entrypoint: []string{args[1]},
 		Cmd:        args[2:],
+		NoCmd:      false,
 		// TODO: support other options as well via flags
 		Env:  cm.invokeConfig.Env,
 		User: cm.invokeConfig.User,

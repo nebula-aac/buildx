@@ -17,7 +17,7 @@ import (
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/debug"
 	"github.com/docker/go-units"
-	"github.com/moby/buildkit/util/appcontext"
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -26,9 +26,7 @@ type inspectOptions struct {
 	builder   string
 }
 
-func runInspect(dockerCli command.Cli, in inspectOptions) error {
-	ctx := appcontext.Context()
-
+func runInspect(ctx context.Context, dockerCli command.Cli, in inspectOptions) error {
 	b, err := builder.New(dockerCli,
 		builder.WithName(in.builder),
 		builder.WithSkippedValidation(),
@@ -37,10 +35,11 @@ func runInspect(dockerCli command.Cli, in inspectOptions) error {
 		return err
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
+	timeoutCtx, cancel := context.WithCancelCause(ctx)
+	timeoutCtx, _ = context.WithTimeoutCause(timeoutCtx, 20*time.Second, errors.WithStack(context.DeadlineExceeded)) //nolint:govet,lostcancel // no need to manually cancel this context as we already rely on parent
+	defer func() { cancel(errors.WithStack(context.Canceled)) }()
 
-	nodes, err := b.LoadNodes(timeoutCtx, true)
+	nodes, err := b.LoadNodes(timeoutCtx, builder.WithData())
 	if in.bootstrap {
 		var ok bool
 		ok, err = b.Boot(ctx)
@@ -48,7 +47,7 @@ func runInspect(dockerCli command.Cli, in inspectOptions) error {
 			return err
 		}
 		if ok {
-			nodes, err = b.LoadNodes(timeoutCtx, true)
+			nodes, err = b.LoadNodes(timeoutCtx, builder.WithData())
 		}
 	}
 
@@ -87,13 +86,16 @@ func runInspect(dockerCli command.Cli, in inspectOptions) error {
 				fmt.Fprintf(w, "Error:\t%s\n", err.Error())
 			} else {
 				fmt.Fprintf(w, "Status:\t%s\n", nodes[i].DriverInfo.Status)
-				if len(n.Flags) > 0 {
-					fmt.Fprintf(w, "Flags:\t%s\n", strings.Join(n.Flags, " "))
+				if len(n.BuildkitdFlags) > 0 {
+					fmt.Fprintf(w, "BuildKit daemon flags:\t%s\n", strings.Join(n.BuildkitdFlags, " "))
 				}
 				if nodes[i].Version != "" {
-					fmt.Fprintf(w, "Buildkit:\t%s\n", nodes[i].Version)
+					fmt.Fprintf(w, "BuildKit version:\t%s\n", nodes[i].Version)
 				}
-				fmt.Fprintf(w, "Platforms:\t%s\n", strings.Join(platformutil.FormatInGroups(n.Node.Platforms, n.Platforms), ", "))
+				platforms := platformutil.FormatInGroups(n.Node.Platforms, n.Platforms)
+				if len(platforms) > 0 {
+					fmt.Fprintf(w, "Platforms:\t%s\n", strings.Join(platforms, ", "))
+				}
 				if debug.IsEnabled() {
 					fmt.Fprintf(w, "Features:\n")
 					features := nodes[i].Driver.Features(ctx)
@@ -122,8 +124,20 @@ func runInspect(dockerCli command.Cli, in inspectOptions) error {
 					if rule.KeepDuration > 0 {
 						fmt.Fprintf(w, "\tKeep Duration:\t%v\n", rule.KeepDuration.String())
 					}
-					if rule.KeepBytes > 0 {
-						fmt.Fprintf(w, "\tKeep Bytes:\t%s\n", units.BytesSize(float64(rule.KeepBytes)))
+					if rule.ReservedSpace > 0 {
+						fmt.Fprintf(w, "\tReserved Space:\t%s\n", units.BytesSize(float64(rule.ReservedSpace)))
+					}
+					if rule.MaxUsedSpace > 0 {
+						fmt.Fprintf(w, "\tMax Used Space:\t%s\n", units.BytesSize(float64(rule.MaxUsedSpace)))
+					}
+					if rule.MinFreeSpace > 0 {
+						fmt.Fprintf(w, "\tMin Free Space:\t%s\n", units.BytesSize(float64(rule.MinFreeSpace)))
+					}
+				}
+				for f, dt := range nodes[i].Files {
+					fmt.Fprintf(w, "File#%s:\n", f)
+					for _, line := range strings.Split(string(dt), "\n") {
+						fmt.Fprintf(w, "\t> %s\n", line)
 					}
 				}
 			}
@@ -147,7 +161,7 @@ func inspectCmd(dockerCli command.Cli, rootOpts *rootOptions) *cobra.Command {
 			if len(args) > 0 {
 				options.builder = args[0]
 			}
-			return runInspect(dockerCli, options)
+			return runInspect(cmd.Context(), dockerCli, options)
 		},
 		ValidArgsFunction: completion.BuilderNames(dockerCli),
 	}

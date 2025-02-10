@@ -6,12 +6,18 @@ import (
 	"errors"
 	"net/url"
 
-	"github.com/docker/distribution/reference"
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 )
 
 // ContainerCommit applies changes to a container and creates a new tagged image.
-func (cli *Client) ContainerCommit(ctx context.Context, container string, options types.ContainerCommitOptions) (types.IDResponse, error) {
+func (cli *Client) ContainerCommit(ctx context.Context, containerID string, options container.CommitOptions) (types.IDResponse, error) {
+	containerID, err := trimID("container", containerID)
+	if err != nil {
+		return types.IDResponse{}, err
+	}
+
 	var repository, tag string
 	if options.Reference != "" {
 		ref, err := reference.ParseNormalizedNamed(options.Reference)
@@ -31,7 +37,7 @@ func (cli *Client) ContainerCommit(ctx context.Context, container string, option
 	}
 
 	query := url.Values{}
-	query.Set("container", container)
+	query.Set("container", containerID)
 	query.Set("repo", repository)
 	query.Set("tag", tag)
 	query.Set("comment", options.Comment)

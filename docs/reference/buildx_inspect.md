@@ -1,6 +1,6 @@
 # buildx inspect
 
-```
+```text
 docker buildx inspect [NAME]
 ```
 
@@ -11,8 +11,9 @@ Inspect current builder instance
 
 | Name                        | Type     | Default | Description                                 |
 |:----------------------------|:---------|:--------|:--------------------------------------------|
-| [`--bootstrap`](#bootstrap) |          |         | Ensure builder has booted before inspecting |
+| [`--bootstrap`](#bootstrap) | `bool`   |         | Ensure builder has booted before inspecting |
 | [`--builder`](#builder)     | `string` |         | Override the configured builder instance    |
+| `-D`, `--debug`             | `bool`   |         | Enable debug logging                        |
 
 
 <!---MARKER_GEN_END-->
@@ -27,7 +28,7 @@ Shows information about the current or specified builder.
 
 Use the `--bootstrap` option to ensure that the builder is running before
 inspecting it. If the driver is `docker-container`, then `--bootstrap` starts
-the buildkit container and waits until it is operational. Bootstrapping is
+the BuildKit container and waits until it's operational. Bootstrapping is
 automatically done during build, and therefore not necessary. The same BuildKit
 container is used during the lifetime of the associated builder node (as
 displayed in `buildx ls`).
@@ -43,9 +44,10 @@ name of the builder to inspect to get information about that builder.
 The following example shows information about a builder instance named
 `elated_tesla`:
 
-> **Note**
->
-> Asterisk `*` next to node build platform(s) indicate they had been set manually during `buildx create`. Otherwise, it had been autodetected.
+> [!NOTE]
+> The asterisk (`*`) next to node build platform(s) indicate they have been
+> manually set during `buildx create`. Otherwise the platforms were
+> automatically detected.
 
 ```console
 $ docker buildx inspect elated_tesla
