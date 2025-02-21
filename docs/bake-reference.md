@@ -1,4 +1,6 @@
-# Bake file reference
+---
+title: Bake file reference
+---
 
 The Bake file is a file for defining workflows that you run using `docker buildx bake`.
 
@@ -12,18 +14,118 @@ You can define your Bake file in the following file formats:
 
 By default, Bake uses the following lookup order to find the configuration file:
 
-1. `docker-bake.override.hcl`
-2. `docker-bake.hcl`
-3. `docker-bake.override.json`
-4. `docker-bake.json`
-5. `docker-compose.yaml`
-6. `docker-compose.yml`
+1. `compose.yaml`
+2. `compose.yml`
+3. `docker-compose.yml`
+4. `docker-compose.yaml`
+5. `docker-bake.json`
+6. `docker-bake.hcl`
+7. `docker-bake.override.json`
+8. `docker-bake.override.hcl`
 
-Bake searches for the file in the current working directory.
 You can specify the file location explicitly using the `--file` flag:
 
 ```console
-$ docker buildx bake --file=../docker/bake.hcl --print
+$ docker buildx bake --file ../docker/bake.hcl --print
+```
+
+If you don't specify a file explicitly, Bake searches for the file in the
+current working directory. If more than one Bake file is found, all files are
+merged into a single definition. Files are merged according to the lookup
+order. That means that if your project contains both a `compose.yaml` file and
+a `docker-bake.hcl` file, Bake loads the `compose.yaml` file first, and then
+the `docker-bake.hcl` file.
+
+If merged files contain duplicate attribute definitions, those definitions are
+either merged or overridden by the last occurrence, depending on the attribute.
+The following attributes are overridden by the last occurrence:
+
+- `target.cache-to`
+- `target.dockerfile-inline`
+- `target.dockerfile`
+- `target.outputs`
+- `target.platforms`
+- `target.pull`
+- `target.tags`
+- `target.target`
+
+For example, if `compose.yaml` and `docker-bake.hcl` both define the `tags`
+attribute, the `docker-bake.hcl` is used.
+
+```console
+$ cat compose.yaml
+services:
+  webapp:
+    build:
+      context: .
+      tags:
+        - bar
+$ cat docker-bake.hcl
+target "webapp" {
+  tags = ["foo"]
+}
+$ docker buildx bake --print webapp
+{
+  "group": {
+    "default": {
+      "targets": [
+        "webapp"
+      ]
+    }
+  },
+  "target": {
+    "webapp": {
+      "context": ".",
+      "dockerfile": "Dockerfile",
+      "tags": [
+        "foo"
+      ]
+    }
+  }
+}
+```
+
+All other attributes are merged. For example, if `compose.yaml` and
+`docker-bake.hcl` both define unique entries for the `labels` attribute, all
+entries are included. Duplicate entries for the same label are overridden.
+
+```console
+$ cat compose.yaml
+services:
+  webapp:
+    build:
+      context: .
+      labels: 
+        com.example.foo: "foo"
+        com.example.name: "Alice"
+$ cat docker-bake.hcl
+target "webapp" {
+  labels = {
+    "com.example.bar" = "bar"
+    "com.example.name" = "Bob"
+  }
+}
+$ docker buildx bake --print webapp
+{
+  "group": {
+    "default": {
+      "targets": [
+        "webapp"
+      ]
+    }
+  },
+  "target": {
+    "webapp": {
+      "context": ".",
+      "dockerfile": "Dockerfile",
+      "labels": {
+        "com.example.foo": "foo",
+        "com.example.bar": "bar",
+        "com.example.name": "Bob"
+      }
+    }
+  }
+}
 ```
 
 ## Syntax
@@ -113,13 +215,16 @@ target "webapp" {
 The following table shows the complete list of attributes that you can assign to a target:
 
 | Name                                            | Type    | Description                                                          |
-| ----------------------------------------------- | ------- | -------------------------------------------------------------------- |
+|-------------------------------------------------|---------|----------------------------------------------------------------------|
 | [`args`](#targetargs)                           | Map     | Build arguments                                                      |
+| [`annotations`](#targetannotations)             | List    | Exporter annotations                                                 |
 | [`attest`](#targetattest)                       | List    | Build attestations                                                   |
 | [`cache-from`](#targetcache-from)               | List    | External cache sources                                               |
 | [`cache-to`](#targetcache-to)                   | List    | External cache destinations                                          |
+| [`call`](#targetcall)                           | String  | Specify the frontend method to call for the target.                  |
 | [`context`](#targetcontext)                     | String  | Set of files located in the specified path or URL                    |
 | [`contexts`](#targetcontexts)                   | Map     | Additional build contexts                                            |
+| [`description`](#targetdescription)             | String  | Description of a target                                              |
 | [`dockerfile-inline`](#targetdockerfile-inline) | String  | Inline Dockerfile string                                             |
 | [`dockerfile`](#targetdockerfile)               | String  | Dockerfile location                                                  |
 | [`inherits`](#targetinherits)                   | List    | Inherit attributes from other targets                                |
@@ -132,9 +237,11 @@ The following table shows the complete list of attributes that you can assign to
 | [`platforms`](#targetplatforms)                 | List    | Target platforms                                                     |
 | [`pull`](#targetpull)                           | Boolean | Always pull images                                                   |
 | [`secret`](#targetsecret)                       | List    | Secrets to expose to the build                                       |
+| [`shm-size`](#targetshm-size)                   | List    | Size of `/dev/shm`                                                   |
 | [`ssh`](#targetssh)                             | List    | SSH agent sockets or keys to expose to the build                     |
 | [`tags`](#targettags)                           | List    | Image names and tags                                                 |
 | [`target`](#targettarget)                       | String  | Target build stage                                                   |
+| [`ulimits`](#targetulimits)                     | List    | Ulimit options                                                       |
 
 ### `target.args`
 
@@ -171,6 +278,33 @@ target "db" {
 }
 ```
 
+### `target.annotations`
+
+The `annotations` attribute lets you add annotations to images built with bake.
+The key takes a list of annotations, in the format of `KEY=VALUE`.
+
+```hcl
+target "default" {
+  output = [{ type = "image", name = "foo" }]
+  annotations = ["org.opencontainers.image.authors=dvdksn"]
+}
+```
+
+By default, the annotation is added to image manifests. You can configure the
+level of the annotations by adding a prefix to the annotation, containing a
+comma-separated list of all the levels that you want to annotate. The following
+example adds annotations to both the image index and manifests.
+
+```hcl
+target "default" {
+  output = [{ type = "image", name = "foo" }]
+  annotations = ["index,manifest:org.opencontainers.image.authors=dvdksn"]
+}
+```
+
+Read about the supported levels in
+[Specifying annotation levels](https://docs.docker.com/build/building/annotations/#specifying-annotation-levels).
+
 ### `target.attest`
 
 The `attest` attribute lets you apply [build attestations][attestations] to the target.
@@ -179,8 +313,13 @@ This attribute accepts the long-form CSV version of attestation parameters.
 ```hcl
 target "default" {
   attest = [
-    "type=provenance,mode=min",
-    "type=sbom"
+    {
+      type = "provenance",
+      mode = "max",
+    },
+    {
+      type = "sbom",
+    }
   ]
 }
 ```
@@ -196,8 +335,15 @@ This takes a list value, so you can specify multiple cache sources.
 ```hcl
 target "app" {
   cache-from = [
-    "type=s3,region=eu-west-1,bucket=mybucket",
-    "user/repo:cache",
+    {
+      type = "s3",
+      region = "eu-west-1",
+      bucket = "mybucket"
+    },
+    {
+      type = "registry",
+      ref = "user/repo:cache"
+    }
   ]
 }
 ```
@@ -213,11 +359,39 @@ This takes a list value, so you can specify multiple cache export targets.
 ```hcl
 target "app" {
   cache-to = [
-    "type=s3,region=eu-west-1,bucket=mybucket",
-    "type=inline"
+    {
+      type = "s3",
+      region = "eu-west-1",
+      bucket = "mybucket"
+    },
+    {
+      type = "inline",
+    }
   ]
 }
 ```
+
+### `target.call`
+
+Specifies the frontend method to use. Frontend methods let you, for example,
+execute build checks only, instead of running a build. This is the same as the
+`--call` flag.
+
+```hcl
+target "app" {
+  call = "check"
+}
+```
+
+Supported values are:
+
+- `build` builds the target (default)
+- `check`: evaluates [build checks](https://docs.docker.com/build/checks/) for the target
+- `outline`: displays the target's build arguments and their default values if available
+- `targets`: lists all Bake targets in the loaded definition, along with its [description](#targetdescription).
+
+For more information about frontend methods, refer to the CLI reference for
+[`docker buildx build --call`](https://docs.docker.com/reference/cli/docker/buildx/build/#call).
 
 ### `target.context`
 
@@ -303,8 +477,7 @@ COPY --from=src . .
 
 #### Use another target as base
 
-> **Note**
->
+> [!NOTE]
 > You should prefer to use regular multi-stage builds over this option. You can
 > Use this feature when you have multiple Dockerfiles that can't be easily
 > merged into one.
@@ -326,6 +499,25 @@ target "app" {
 FROM baseapp
 RUN echo "Hello world"
 ```
+
+### `target.description`
+
+Defines a human-readable description for the target, clarifying its purpose or
+functionality.
+
+```hcl
+target "lint" {
+    description = "Runs golangci-lint to detect style errors"
+    args = {
+        GOLANGCI_LINT_VERSION = null
+    }
+    dockerfile = "lint.Dockerfile"
+}
+```
+
+This attribute is useful when combined with the `docker buildx bake --list=targets`
+option, providing a more informative output when listing the available build
+targets in a Bake file.
 
 ### `target.dockerfile-inline`
 
@@ -365,6 +557,25 @@ $ docker buildx bake --print -f - <<< 'target "default" {}'
   }
 }
 ```
+
+### `target.entitlements`
+
+Entitlements are permissions that the build process requires to run.
+
+Currently supported entitlements are:
+
+- `network.host`: Allows the build to use commands that access the host network. In Dockerfile, use [`RUN --network=host`](https://docs.docker.com/reference/dockerfile/#run---networkhost) to run a command with host network enabled.
+
+- `security.insecure`: Allows the build to run commands in privileged containers that are not limited by the default security sandbox. Such container may potentially access and modify system resources. In Dockerfile, use [`RUN --security=insecure`](https://docs.docker.com/reference/dockerfile/#run---security) to run a command in a privileged container.
+
+```hcl
+target "integration-tests" {
+  # this target requires privileged containers to run nested containers
+  entitlements = ["security.insecure"]
+}
+```
+
+Entitlements are enabled with a two-step process. First, a target must declare the entitlements it requires. Secondly, when invoking the `bake` command, the user must grant the entitlements by passing the `--allow` flag or confirming the entitlements when prompted in an interactive terminal. This is to ensure that the user is aware of the possibly insecure permissions they are granting to the build process.
 
 ### `target.inherits`
 
@@ -610,6 +821,27 @@ target "app" {
 }
 ```
 
+### `target.network`
+
+Specify the network mode for the whole build request. This will override the default network mode
+for all the `RUN` instructions in the Dockerfile. Accepted values are `default`, `host`, and `none`.
+
+Usually, a better approach to set the network mode for your build steps is to instead use `RUN --network=<value>`
+in your Dockerfile. This way, you can set the network mode for individual build steps and everyone building
+the Dockerfile gets consistent behavior without needing to pass additional flags to the build command.
+
+If you set network mode to `host` in your Bake file, you must also grant `network.host` entitlement when
+invoking the `bake` command. This is because `host` network mode requires elevated privileges and can be a security risk.
+You can pass `--allow=network.host` to the `docker buildx bake` command to grant the entitlement, or you can
+confirm the entitlement when prompted if you are using an interactive terminal.
+
+```hcl
+target "app" {
+  # make sure this build does not access internet
+  network = "none"
+}
+```
+
 ### `target.no-cache-filter`
 
 Don't use build cache for the specified stages.
@@ -641,7 +873,7 @@ The following example configures the target to use a cache-only output,
 
 ```hcl
 target "default" {
-  output = ["type=cacheonly"]
+  output = [{ type = "cacheonly" }]
 }
 ```
 
@@ -665,7 +897,7 @@ The following example forces the builder to always pull all images referenced in
 
 ```hcl
 target "default" {
-  pull = "always"
+  pull = true
 }
 ```
 
@@ -681,8 +913,8 @@ variable "HOME" {
 
 target "default" {
   secret = [
-    "type=env,id=KUBECONFIG",
-    "type=file,id=aws,src=${HOME}/.aws/credentials"
+    { type = "env", id = "KUBECONFIG" },
+    { type = "file", id = "aws", src = "${HOME}/.aws/credentials" },
   ]
 }
 ```
@@ -692,9 +924,31 @@ This lets you [mount the secret][run_mount_secret] in your Dockerfile.
 ```dockerfile
 RUN --mount=type=secret,id=aws,target=/root/.aws/credentials \
     aws cloudfront create-invalidation ...
-RUN --mount=type=secret,id=KUBECONFIG \
-    KUBECONFIG=$(cat /run/secrets/KUBECONFIG) helm upgrade --install
+RUN --mount=type=secret,id=KUBECONFIG,env=KUBECONFIG \
+    helm upgrade --install
 ```
+
+### `target.shm-size`
+
+Sets the size of the shared memory allocated for build containers when using
+`RUN` instructions.
+
+The format is `<number><unit>`. `number` must be greater than `0`. Unit is
+optional and can be `b` (bytes), `k` (kilobytes), `m` (megabytes), or `g`
+(gigabytes). If you omit the unit, the system uses bytes.
+
+This is the same as the `--shm-size` flag for `docker build`.
+
+```hcl
+target "default" {
+  shm-size = "128m"
+}
+```
+
+> [!NOTE]
+> In most cases, it is recommended to let the builder automatically determine
+> the appropriate configurations. Manual adjustments should only be considered
+> when specific performance tuning is required for complex build scenarios.
 
 ### `target.ssh`
 
@@ -704,7 +958,7 @@ This can be useful if you need to access private repositories during a build.
 
 ```hcl
 target "default" {
-  ssh = ["default"]
+  ssh = [{ id = "default" }]
 }
 ```
 
@@ -741,6 +995,30 @@ target "default" {
   target = "binaries"
 }
 ```
+
+### `target.ulimits`
+
+Ulimits overrides the default ulimits of build's containers when using `RUN`
+instructions and are specified with a soft and hard limit as such:
+`<type>=<soft limit>[:<hard limit>]`, for example:
+
+```hcl
+target "app" {
+  ulimits = [
+    "nofile=1024:1024"
+  ]
+}
+```
+
+> [!NOTE]
+> If you do not provide a `hard limit`, the `soft limit` is used
+> for both values. If no `ulimits` are set, they are inherited from
+> the default `ulimits` set on the daemon.
+
+> [!NOTE]
+> In most cases, it is recommended to let the builder automatically determine
+> the appropriate configurations. Manual adjustments should only be considered
+> when specific performance tuning is required for complex build scenarios.
 
 ## Group
 
@@ -925,28 +1203,27 @@ target "webapp-dev" {
 }
 ```
 
-> **Note**
->
+> [!NOTE]
 > See [User defined HCL functions][hcl-funcs] page for more details.
 
 <!-- external links -->
 
 [attestations]: https://docs.docker.com/build/attestations/
 [bake_stdlib]: https://github.com/docker/buildx/blob/master/bake/hclparser/stdlib.go
-[build-arg]: https://docs.docker.com/engine/reference/commandline/build/#build-arg
-[build-context]: https://docs.docker.com/engine/reference/commandline/buildx_build/#build-context
+[build-arg]: https://docs.docker.com/reference/cli/docker/image/build/#build-arg
+[build-context]: https://docs.docker.com/reference/cli/docker/buildx/build/#build-context
 [cache-backends]: https://docs.docker.com/build/cache/backends/
-[cache-from]: https://docs.docker.com/engine/reference/commandline/buildx_build/#cache-from
-[cache-to]: https://docs.docker.com/engine/reference/commandline/buildx_build/#cache-to
-[context]: https://docs.docker.com/engine/reference/commandline/buildx_build/#build-context
-[file]: https://docs.docker.com/engine/reference/commandline/build/#file
+[cache-from]: https://docs.docker.com/reference/cli/docker/buildx/build/#cache-from
+[cache-to]: https://docs.docker.com/reference/cli/docker/buildx/build/#cache-to
+[context]: https://docs.docker.com/reference/cli/docker/buildx/build/#build-context
+[file]: https://docs.docker.com/reference/cli/docker/image/build/#file
 [go-cty]: https://github.com/zclconf/go-cty/tree/main/cty/function/stdlib
 [hcl-funcs]: https://docs.docker.com/build/bake/hcl-funcs/
-[output]: https://docs.docker.com/engine/reference/commandline/buildx_build/#output
-[platform]: https://docs.docker.com/engine/reference/commandline/buildx_build/#platform
-[run_mount_secret]: https://docs.docker.com/engine/reference/builder/#run---mounttypesecret
-[secret]: https://docs.docker.com/engine/reference/commandline/buildx_build/#secret
-[ssh]: https://docs.docker.com/engine/reference/commandline/buildx_build/#ssh
-[tag]: https://docs.docker.com/engine/reference/commandline/build/#tag
-[target]: https://docs.docker.com/engine/reference/commandline/build/#target
+[output]: https://docs.docker.com/reference/cli/docker/buildx/build/#output
+[platform]: https://docs.docker.com/reference/cli/docker/buildx/build/#platform
+[run_mount_secret]: https://docs.docker.com/reference/dockerfile/#run---mounttypesecret
+[secret]: https://docs.docker.com/reference/cli/docker/buildx/build/#secret
+[ssh]: https://docs.docker.com/reference/cli/docker/buildx/build/#ssh
+[tag]: https://docs.docker.com/reference/cli/docker/image/build/#tag
+[target]: https://docs.docker.com/reference/cli/docker/image/build/#target
 [userfunc]: https://github.com/hashicorp/hcl/tree/main/ext/userfunc

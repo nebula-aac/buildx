@@ -7,6 +7,7 @@ import (
 
 	"github.com/moby/buildkit/identity"
 	"github.com/moby/buildkit/util/testutil/integration"
+	bkworkers "github.com/moby/buildkit/util/testutil/workers"
 	"github.com/pkg/errors"
 )
 
@@ -17,7 +18,8 @@ func InitRemoteWorker() {
 }
 
 type remoteWorker struct {
-	id string
+	id          string
+	unsupported []string
 }
 
 func (w remoteWorker) Name() string {
@@ -28,8 +30,12 @@ func (w remoteWorker) Rootless() bool {
 	return false
 }
 
+func (w remoteWorker) NetNSDetached() bool {
+	return false
+}
+
 func (w remoteWorker) New(ctx context.Context, cfg *integration.BackendConfig) (b integration.Backend, cl func() error, err error) {
-	oci := integration.OCI{ID: w.id}
+	oci := bkworkers.OCI{ID: w.id}
 	bk, bkclose, err := oci.New(ctx, cfg)
 	if err != nil {
 		return bk, cl, err
@@ -48,11 +54,9 @@ func (w remoteWorker) New(ctx context.Context, cfg *integration.BackendConfig) (
 	}
 
 	cl = func() error {
-		var err error
-		if err1 := bkclose(); err == nil {
-			err = err1
-		}
+		err := bkclose()
 		cmd := exec.Command("buildx", "rm", "-f", name)
+		cmd.Env = append(os.Environ(), "BUILDX_CONFIG=/tmp/buildx-"+name)
 		if err1 := cmd.Run(); err == nil {
 			err = err1
 		}
@@ -60,7 +64,8 @@ func (w remoteWorker) New(ctx context.Context, cfg *integration.BackendConfig) (
 	}
 
 	return &backend{
-		builder: name,
+		builder:             name,
+		unsupportedFeatures: w.unsupported,
 	}, cl, nil
 }
 
